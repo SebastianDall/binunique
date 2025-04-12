@@ -1,11 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufWriter, Write},
+    fs::File,
+    io::{BufReader, BufWriter, Write},
     path::Path,
 };
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use flate2::read::GzDecoder;
 use seq_io::fasta::{Reader, Record};
 
 #[derive(Parser, Debug)]
@@ -32,9 +34,9 @@ struct Args {
     output: String,
 }
 
-struct Contig {
+pub struct Contig {
     pub id: String,
-    pub sequence: String,
+    // pub sequence: String,
 }
 
 pub struct Bin {
@@ -42,22 +44,6 @@ pub struct Bin {
     pub contigs: Vec<Contig>,
     pub completeness: Option<f64>,
     pub contamination: Option<f64>,
-}
-
-impl Bin {
-    fn new(
-        name: impl Into<String>,
-        contigs: Vec<Contig>,
-        completeness: Option<f64>,
-        contamination: Option<f64>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            contigs,
-            completeness,
-            contamination,
-        }
-    }
 }
 
 pub struct BinIntersection {
@@ -70,6 +56,35 @@ pub struct BinIntersection {
     pub jaccard_index: f64,
 }
 
+fn read_fasta<P>(path: P) -> anyhow::Result<Vec<Contig>>
+where
+    P: AsRef<Path>,
+{
+    let path = path.as_ref();
+
+    let file = File::open(path)?;
+    let buf_reader: Box<dyn std::io::BufRead> = if path.extension().map_or(false, |ext| ext == "gz")
+    {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+
+    let mut reader = Reader::new(buf_reader);
+    let mut contig_ids = Vec::new();
+
+    while let Some(record) = reader.next() {
+        let record = record?;
+
+        let rid = record.id()?;
+        let id = rid.to_string();
+        // let sequence = String::from_utf8(record.owned_seq())?;
+        let c = Contig { id }; //, sequence
+        contig_ids.push(c);
+    }
+
+    Ok(contig_ids)
+}
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -85,6 +100,18 @@ fn main() -> anyhow::Result<()> {
             "The provided labels does not match the provided dirs"
         ));
     }
+
+    if args
+        .labels
+        .clone()
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .len()
+        != args.labels.clone().len()
+    {
+        return Err(anyhow!("Duplicate entries in labels"));
+    }
+
     // Create output dir
     std::fs::create_dir_all(&args.output)
         .with_context(|| anyhow!("Could not create output directory: {}", args.output))?;
@@ -106,12 +133,10 @@ fn main() -> anyhow::Result<()> {
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|path| {
-                if let Some(ext_os) = path.extension() {
-                    let ext = ext_os.to_string_lossy().to_lowercase();
-                    allowed_exts.iter().any(|allowed| {
-                        let allowed_norm = allowed.trim_start_matches(".");
-                        ext == allowed_norm
-                    })
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    allowed_exts
+                        .iter()
+                        .any(|ext| filename.to_lowercase().ends_with(ext))
                 } else {
                     false
                 }
@@ -129,18 +154,7 @@ fn main() -> anyhow::Result<()> {
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| anyhow!("Invalid UTF-8 in filename: {:#?}", bp))?;
 
-            let mut contigs = Vec::new();
-            let mut reader = Reader::from_path(bp).unwrap();
-
-            while let Some(record) = reader.next() {
-                let record = record?;
-
-                let rid = record.id()?;
-                let id = rid.to_string();
-                let sequence = String::from_utf8(record.owned_seq())?;
-                let c = Contig { id, sequence };
-                contigs.push(c);
-            }
+            let contigs = read_fasta(bp)?;
 
             let bin = Bin {
                 name: name.to_string(),
@@ -159,7 +173,7 @@ fn main() -> anyhow::Result<()> {
 
     let binner_labels: Vec<_> = binner_inputs.keys().cloned().collect();
     for (i, label1) in binner_labels.iter().enumerate() {
-        for (label2) in binner_labels.iter().skip(i + 1) {
+        for label2 in binner_labels.iter().skip(i + 1) {
             if let (Some(bins1), Some(bins2)) =
                 (binner_inputs.get(label1), binner_inputs.get(label2))
             {
@@ -203,8 +217,8 @@ fn main() -> anyhow::Result<()> {
         "binner_a\tbin_a\tbinner_b\tbin_b\tintersection\tunion\tjaccard_index"
     )?;
 
-    for i in intersections.iter() {
-        write!(
+    for i in &intersections {
+        writeln!(
             writer,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             i.binner_a,
@@ -215,8 +229,8 @@ fn main() -> anyhow::Result<()> {
             i.union_count,
             i.jaccard_index
         )?;
-        writer.flush()?;
     }
 
+    writer.flush()?;
     Ok(())
 }
