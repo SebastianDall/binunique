@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use flate2::read::GzDecoder;
 use log::info;
-use rayon::prelude::*;
+use rayon::{prelude::*, ThreadPoolBuilder};
 use seq_io::fasta::{Reader, Record};
 use std::{
     collections::{HashMap, HashSet},
@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(short, long, num_args(1..), default_values=vec![".fa", ".fna", ".fasta"], help="Extensions to look for in directories")]
     extensions: Option<Vec<String>>,
+
+    #[arg(short, long, default_value_t = 1, help = "Num processes")]
+    threads: usize,
 
     #[arg(
         short,
@@ -90,6 +93,7 @@ where
 }
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let args = Args::parse();
 
     let allowed_exts: Vec<String> = args
@@ -120,6 +124,11 @@ fn main() -> anyhow::Result<()> {
     // Create output dir
     std::fs::create_dir_all(&args.output)
         .with_context(|| anyhow!("Could not create output directory: {}", args.output))?;
+
+    ThreadPoolBuilder::new()
+        .num_threads(args.threads as usize)
+        .build_global()
+        .unwrap();
 
     let mut binner_inputs: HashMap<String, Vec<Bin>> = HashMap::new();
 
@@ -153,29 +162,30 @@ fn main() -> anyhow::Result<()> {
         }
         info!("{}: {} bins found.", &label, bin_paths.len());
 
-        let mut bins = Vec::new();
-        for bp in bin_paths.iter() {
-            let name = bp
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow!("Invalid UTF-8 in filename: {:#?}", bp))?;
+        let bins: Vec<Bin> = bin_paths
+            .into_par_iter()
+            .map(|bp| {
+                let name = bp
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| anyhow!("Invalid UTF-8 in filename: {:#?}", bp))?;
 
-            let contigs = read_fasta(bp)?;
+                let contigs = read_fasta(&bp)?;
 
-            let contig_ids = contigs
-                .iter()
-                .map(|c| c.clone())
-                .collect::<HashSet<Contig>>();
+                let contig_ids = contigs
+                    .iter()
+                    .map(|c| c.clone())
+                    .collect::<HashSet<Contig>>();
 
-            let bin = Bin {
-                name: name.to_string(),
-                contig_ids,
-                completeness: None,
-                contamination: None,
-            };
+                Ok(Bin {
+                    name: name.to_string(),
+                    contig_ids,
+                    completeness: None,
+                    contamination: None,
+                })
+            })
+            .collect::<Result<Vec<Bin>, anyhow::Error>>()?;
 
-            bins.push(bin);
-        }
         binner_inputs.insert(label.to_owned(), bins);
     }
 
@@ -200,6 +210,7 @@ fn main() -> anyhow::Result<()> {
         .into_par_iter()
         .map(|(label1, label2)| {
             let mut local_vec = Vec::new();
+            info!("Comparing: {} vs {}", label1, label2);
 
             if let (Some(bins1), Some(bins2)) =
                 (binner_inputs.get(label1), binner_inputs.get(label2))
