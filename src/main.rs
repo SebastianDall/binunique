@@ -1,14 +1,15 @@
+use anyhow::{anyhow, Context};
+use clap::Parser;
+use flate2::read::GzDecoder;
+use log::info;
+use rayon::prelude::*;
+use seq_io::fasta::{Reader, Record};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, BufWriter, Write},
     path::Path,
 };
-
-use anyhow::{anyhow, Context};
-use clap::Parser;
-use flate2::read::GzDecoder;
-use seq_io::fasta::{Reader, Record};
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -34,6 +35,7 @@ struct Args {
     output: String,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Contig {
     pub id: String,
     // pub sequence: String,
@@ -41,7 +43,8 @@ pub struct Contig {
 
 pub struct Bin {
     pub name: String,
-    pub contigs: Vec<Contig>,
+    // pub contigs: Vec<Contig>,
+    pub contig_ids: HashSet<Contig>,
     pub completeness: Option<f64>,
     pub contamination: Option<f64>,
 }
@@ -86,6 +89,7 @@ where
     Ok(contig_ids)
 }
 fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
     let allowed_exts: Vec<String> = args
@@ -94,6 +98,7 @@ fn main() -> anyhow::Result<()> {
         .into_iter()
         .map(|e| e.to_lowercase())
         .collect();
+    info!("Using extensions to search for bins {:?}", &allowed_exts);
 
     if args.bin_dirs.len() != args.labels.len() {
         return Err(anyhow!(
@@ -146,6 +151,7 @@ fn main() -> anyhow::Result<()> {
         if bin_paths.is_empty() {
             return Err(anyhow!("No bins found in path: {}", dir));
         }
+        info!("{}: {} bins found.", &label, bin_paths.len());
 
         let mut bins = Vec::new();
         for bp in bin_paths.iter() {
@@ -156,9 +162,14 @@ fn main() -> anyhow::Result<()> {
 
             let contigs = read_fasta(bp)?;
 
+            let contig_ids = contigs
+                .iter()
+                .map(|c| c.clone())
+                .collect::<HashSet<Contig>>();
+
             let bin = Bin {
                 name: name.to_string(),
-                contigs,
+                contig_ids,
                 completeness: None,
                 contamination: None,
             };
@@ -169,20 +180,35 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Compare contig overlap between bins for different binners.
-    let mut intersections: Vec<BinIntersection> = Vec::new();
+    info!("Comparing bin overlaps");
+    // let mut intersections: Vec<BinIntersection> = Vec::new();
 
     let binner_labels: Vec<_> = binner_inputs.keys().cloned().collect();
-    for (i, label1) in binner_labels.iter().enumerate() {
-        for label2 in binner_labels.iter().skip(i + 1) {
+
+    let binner_pairs = binner_labels
+        .iter()
+        .enumerate()
+        .flat_map(|(i, label1)| {
+            binner_labels
+                .iter()
+                .skip(i + 1)
+                .map(move |label2| (label1, label2))
+        })
+        .collect::<Vec<(_, _)>>();
+
+    let intersections: Vec<BinIntersection> = binner_pairs
+        .into_par_iter()
+        .map(|(label1, label2)| {
+            let mut local_vec = Vec::new();
+
             if let (Some(bins1), Some(bins2)) =
                 (binner_inputs.get(label1), binner_inputs.get(label2))
             {
                 for bin1 in bins1 {
-                    let set1: HashSet<String> = bin1.contigs.iter().map(|c| c.id.clone()).collect();
+                    let set1 = bin1.contig_ids.clone();
 
                     for bin2 in bins2 {
-                        let set2: HashSet<String> =
-                            bin2.contigs.iter().map(|c| c.id.clone()).collect();
+                        let set2 = bin2.contig_ids.clone();
 
                         let intersection_count = set1.intersection(&set2).count();
                         let union_count = set1.len() + set2.len() - intersection_count;
@@ -192,7 +218,7 @@ fn main() -> anyhow::Result<()> {
                             0.0
                         };
 
-                        intersections.push(BinIntersection {
+                        local_vec.push(BinIntersection {
                             binner_a: label1.clone(),
                             bin_a: bin1.name.clone(),
                             binner_b: label2.clone(),
@@ -200,12 +226,51 @@ fn main() -> anyhow::Result<()> {
                             intersection_count,
                             union_count,
                             jaccard_index,
-                        })
+                        });
                     }
                 }
             }
-        }
-    }
+            local_vec
+        })
+        .reduce_with(|mut acc, mut next| {
+            acc.append(&mut next);
+            acc
+        })
+        .unwrap_or_default();
+
+    // for (i, label1) in binner_labels.iter().enumerate() {
+    //     for label2 in binner_labels.iter().skip(i + 1) {
+    //         if let (Some(bins1), Some(bins2)) =
+    //             (binner_inputs.get(label1), binner_inputs.get(label2))
+    //         {
+    //             for bin1 in bins1 {
+    //                 let set1 = bin1.contig_ids.clone();
+
+    //                 for bin2 in bins2 {
+    //                     let set2 = bin2.contig_ids.clone();
+
+    //                     let intersection_count = set1.intersection(&set2).count();
+    //                     let union_count = set1.len() + set2.len() - intersection_count;
+    //                     let jaccard_index = if union_count > 0 {
+    //                         intersection_count as f64 / union_count as f64
+    //                     } else {
+    //                         0.0
+    //                     };
+
+    //                     intersections.push(BinIntersection {
+    //                         binner_a: label1.clone(),
+    //                         bin_a: bin1.name.clone(),
+    //                         binner_b: label2.clone(),
+    //                         bin_b: bin2.name.clone(),
+    //                         intersection_count,
+    //                         union_count,
+    //                         jaccard_index,
+    //                     })
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     let outpath = Path::new(&args.output).join("bin-comparisons.tsv");
     let outfile = std::fs::File::create(outpath.clone())
