@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use flate2::read::GzDecoder;
+use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use log::info;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use seq_io::fasta::{Reader, Record};
@@ -132,6 +133,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut binner_inputs: HashMap<String, Vec<Bin>> = HashMap::new();
 
+    let style =
+        ProgressStyle::with_template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("##-");
+
     for bl in args
         .bin_dirs
         .clone()
@@ -160,10 +166,16 @@ fn main() -> anyhow::Result<()> {
         if bin_paths.is_empty() {
             return Err(anyhow!("No bins found in path: {}", dir));
         }
-        info!("{}: {} bins found.", &label, bin_paths.len());
+        let nbins = bin_paths.len() as u64;
+
+        let pb = ProgressBar::new(nbins);
+        pb.set_style(style.clone());
+        let msg = format!("{}: Loading bins...", &label);
+        pb.set_message(msg);
 
         let bins: Vec<Bin> = bin_paths
             .into_par_iter()
+            .progress_with(pb)
             .map(|bp| {
                 let name = bp
                     .file_stem()
