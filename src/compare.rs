@@ -31,10 +31,26 @@ pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
                     for bin2 in bins2 {
                         let set2 = bin2.contig_ids.clone();
 
-                        let intersection_count = set1.intersection(&set2).count();
+                        let intersection = set1.intersection(&set2);
+
+                        let intersection_count = intersection.clone().count();
                         let union_count = set1.len() + set2.len() - intersection_count;
                         let jaccard_index = if union_count > 0 {
                             intersection_count as f64 / union_count as f64
+                        } else {
+                            0.0
+                        };
+
+                        let intersection_size: u64 =
+                            intersection.into_iter().map(|c| c.length).sum();
+
+                        let bin1_size: u64 = set1.clone().into_iter().map(|c| c.length).sum();
+                        let bin2_size: u64 = set2.clone().into_iter().map(|c| c.length).sum();
+
+                        let union_size = bin1_size + bin2_size - intersection_size;
+
+                        let weighted_jaccard_index = if union_count > 0 {
+                            intersection_size as f64 / union_size as f64
                         } else {
                             0.0
                         };
@@ -47,6 +63,9 @@ pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
                             intersection_count,
                             union_count,
                             jaccard_index,
+                            intersection_size,
+                            union_size,
+                            weighted_jaccard_index,
                         });
                     }
                 }

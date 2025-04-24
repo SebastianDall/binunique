@@ -15,20 +15,23 @@ pub fn write_tsv<P: AsRef<Path>>(outdir: P, data: &[BinIntersection]) -> Result<
 
     writeln!(
         writer,
-        "binner_a\tbin_a\tbinner_b\tbin_b\tintersection\tunion\tjaccard_index"
+        "binner_a\tbin_a\tbinner_b\tbin_b\tintersection\tunion\tjaccard_index\tintersection_size\tunion_size\tweighted_jaccard_index"
     )?;
 
     for i in data {
         writeln!(
             writer,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             i.binner_a,
             i.bin_a,
             i.binner_b,
             i.bin_b,
             i.intersection_count,
             i.union_count,
-            i.jaccard_index
+            i.jaccard_index,
+            i.intersection_size,
+            i.union_size,
+            i.weighted_jaccard_index
         )?;
     }
 

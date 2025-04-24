@@ -22,4 +22,7 @@ pub struct BinIntersection {
     pub intersection_count: usize,
     pub union_count: usize,
     pub jaccard_index: f64,
+    pub intersection_size: u64,
+    pub union_size: u64,
+    pub weighted_jaccard_index: f64,
 }
