@@ -26,26 +26,27 @@ pub fn compute_ani(genome1: &Bin, genome2: &Bin) -> anyhow::Result<ANI> {
 
     let _header = lines.next();
 
-    let result_line = lines
-        .next()
-        .ok_or_else(|| anyhow!("No result line found"))?;
+    let maybe_result_line = lines.next();
+    if let Some(result_line) = maybe_result_line {
+        let fields: Vec<&str> = result_line.split('\t').collect();
+        if fields.len() != 7 {
+            return Err(anyhow!("Unexpected output from skani"));
+        }
 
-    let fields: Vec<&str> = result_line.split('\t').collect();
-    if fields.len() != 7 {
-        return Err(anyhow!("Unexpected output from skani"));
+        let ani: f64 = fields[2].parse()?;
+        let afr: f64 = fields[3].parse()?;
+        let afq: f64 = fields[4].parse()?;
+
+        let ani_result = ANI {
+            ani,
+            alignment_fraction_ref: afr,
+            alignment_fraction_query: afq,
+        };
+
+        Ok(ani_result)
+    } else {
+        Ok(ANI::default())
     }
-
-    let ani: f64 = fields[2].parse()?;
-    let afr: f64 = fields[3].parse()?;
-    let afq: f64 = fields[4].parse()?;
-
-    let ani_result = ANI {
-        ani,
-        alignment_fraction_ref: afr,
-        alignment_fraction_query: afq,
-    };
-
-    Ok(ani_result)
 }
 
 pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
