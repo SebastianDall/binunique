@@ -66,6 +66,7 @@ pub fn load_bins(
 
                 Ok(Bin {
                     name: name.to_string(),
+                    file: bp,
                     contig_ids,
                     completeness: None,
                     contamination: None,

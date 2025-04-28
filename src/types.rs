@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct ContigStats {
@@ -8,7 +8,7 @@ pub struct ContigStats {
 
 pub struct Bin {
     pub name: String,
-    // pub contigs: Vec<Contig>,
+    pub file: PathBuf,
     pub contig_ids: HashSet<ContigStats>,
     pub completeness: Option<f64>,
     pub contamination: Option<f64>,
@@ -25,4 +25,12 @@ pub struct BinIntersection {
     pub intersection_size: u64,
     pub union_size: u64,
     pub weighted_jaccard_index: f64,
+    pub ani: ANI,
+}
+
+#[derive(Default)]
+pub struct ANI {
+    pub ani: f64,
+    pub alignment_fraction_ref: f64,
+    pub alignment_fraction_query: f64,
 }

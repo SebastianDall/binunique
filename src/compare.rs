@@ -1,8 +1,52 @@
+use anyhow::anyhow;
 use log::info;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::process::Command;
+use std::str;
 
-use crate::types::{Bin, BinIntersection};
+use crate::types::{Bin, BinIntersection, ANI};
+
+pub fn compute_ani(genome1: &Bin, genome2: &Bin) -> anyhow::Result<ANI> {
+    let output = Command::new("skani")
+        .args(&[
+            "dist",
+            genome1.file.as_os_str().to_str().unwrap(),
+            genome2.file.as_os_str().to_str().unwrap(),
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow!("Skani failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+    }
+
+    let stdout = str::from_utf8(&output.stdout)?;
+
+    let mut lines = stdout.lines();
+
+    let _header = lines.next();
+
+    let result_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("No result line found"))?;
+
+    let fields: Vec<&str> = result_line.split('\t').collect();
+    if fields.len() != 7 {
+        return Err(anyhow!("Unexpected output from skani"));
+    }
+
+    let ani: f64 = fields[2].parse()?;
+    let afr: f64 = fields[3].parse()?;
+    let afq: f64 = fields[4].parse()?;
+
+    let ani_result = ANI {
+        ani,
+        alignment_fraction_ref: afr,
+        alignment_fraction_query: afq,
+    };
+
+    Ok(ani_result)
+}
 
 pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
     let binner_labels: Vec<_> = input.keys().cloned().collect();
@@ -35,7 +79,7 @@ pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
 
                         let intersection_count = intersection.clone().count();
                         let union_count = set1.len() + set2.len() - intersection_count;
-                        let jaccard_index = if union_count > 0 {
+                        let jaccard_index = if intersection_count > 0 {
                             intersection_count as f64 / union_count as f64
                         } else {
                             0.0
@@ -49,10 +93,16 @@ pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
 
                         let union_size = bin1_size + bin2_size - intersection_size;
 
-                        let weighted_jaccard_index = if union_count > 0 {
+                        let weighted_jaccard_index = if intersection_count > 0 {
                             intersection_size as f64 / union_size as f64
                         } else {
                             0.0
+                        };
+
+                        let ani = if intersection_count > 0 {
+                            compute_ani(&bin1, &bin2).unwrap()
+                        } else {
+                            ANI::default()
                         };
 
                         local_vec.push(BinIntersection {
@@ -66,6 +116,7 @@ pub fn all_pairwise(input: HashMap<String, Vec<Bin>>) -> Vec<BinIntersection> {
                             intersection_size,
                             union_size,
                             weighted_jaccard_index,
+                            ani,
                         });
                     }
                 }
